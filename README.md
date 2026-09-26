@@ -20,6 +20,7 @@ After setup, open a **new** Windows Terminal tab. The prompt shows RAM on the ri
 | Neovim config (plugins + LSPs) | `%LOCALAPPDATA%\nvim\` (`init.lua`, `lua\config`, `lua\plugins`) |
 | Neovim keymaps seed | `%LOCALAPPDATA%\nvim\lua\config\keymaps.lua` (never overwritten) |
 | Weekly updater wrapper | `%LOCALAPPDATA%\dev-terminal\Update-AllTheThings.ps1` |
+| Git aliases | `%LOCALAPPDATA%\dev-terminal\git-aliases.gitconfig` (included from `~/.gitconfig`) |
 
 Do **not** use `-SkipProfileInstall` if you plan to delete this folder.
 
@@ -234,6 +235,41 @@ In the shell, `Get-Help <Name> -Examples` works for every function below.
 | `zadd` | `Add-7ZipItem` |
 | `zrm` | `Remove-7ZipItem` |
 | `zx` | `Expand-7ZipArchive` |
+
+---
+
+## Git aliases
+
+Exported from this machine's `~/.gitconfig` into [`git/aliases.gitconfig`](git/aliases.gitconfig). `setup.ps1` copies that file onto the machine and adds:
+
+```text
+git config --global --add include.path %LOCALAPPDATA%/dev-terminal/git-aliases.gitconfig
+```
+
+List them anytime with `git aliases`. Everyday ones:
+
+| Alias | What it does |
+| --- | --- |
+| `git gs` | status |
+| `git ps` / `git publish` / `git pushNew` | push / push `-u origin HEAD` / set upstream |
+| `git br` / `git brr` / `git branches` | branch / all branches / `branch -v` |
+| `git sw` / `git create` / `git new` | switch / create branch |
+| `git d` | word-colored diff |
+| `git ac` / `git qa` | add-all + commit / commit |
+| `git undo` / `git uncommit` | soft reset last commit |
+| `git lol` / `git last` / `git history` | oneline log / last commit / dated log |
+| `git today` / `git this-week` / `git yesterday` | time-boxed logs |
+| `git shm` / `git shl` / `git useLast` | stash push -m / stash list / apply latest |
+| `git fap` | fetch --prune |
+| `git pull-safe` / `git prep` / `git sync-safe` | ff-only pull / rebase pull / pull+push |
+| `git push-safe` | force-with-lease |
+| `git colast` | checkout previous branch |
+| `git rb` | fetch, stash if needed, rebase, stash pop |
+| `git snapshot` | stash including untracked, then re-apply |
+| `git summary` | branch/author/churn summary |
+| `git aliases` | print every alias |
+
+Shell-style aliases (`!f() { ... }`, `awk`, `sed`) need Git for Windows (Git Bash). That is what this machine already uses.
 
 ---
 

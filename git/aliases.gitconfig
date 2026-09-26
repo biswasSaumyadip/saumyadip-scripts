@@ -1,0 +1,123 @@
+# Exported from this machine's global ~/.gitconfig [alias] section.
+# setup.ps1 copies this file to %LOCALAPPDATA%\dev-terminal\git-aliases.gitconfig
+# and adds it via: git config --global include.path
+[alias]
+	gs = !git status
+	ps = !git push
+	publish = !git push -u origin HEAD
+	br = !git branch
+	brr = !git branch -a
+	shm = !git stash push -m
+	shl = !git stash list
+	d = !git diff --color-words
+	sw = !git switch
+	create = !git switch -c
+	new = !git switch -c
+	fap = !git fetch --prune
+	blame = !git blame -w -M -C
+	ac = !git add -A && git commit -m
+	undo = !git reset --soft HEAD^
+	useLast = !git stash apply stash@{0}
+	sha = "!f() { git stash apply stash@\\{$1\\}; }; f"
+	shs = "!f() { git stash show -p stash@{}; }; f"
+	shaf = "!f() { git checkout stash@{} -- ; }; f"
+	qa = !git commit -m
+	reset-hard = !git reset --hard HEAD^
+	alias-add = "!f() { git config --global alias.\"$1\" \"$2\"; }; f"
+	lol = log --oneline
+	delete-branch = "!f() { git branch -d $1; }; f"
+	find = "!f() { git log --all --grep=\"$1\"; }; f"
+	copyPath = "!git rev-parse --show-toplevel | sed -e s#/#\\\\\\\\#g | clip"
+	aliases = !git config --get-regexp \"alias\\\\.\"
+	today = log --since=midnight --oneline --graph
+	this-week = log --since='1 week ago' --oneline --graph
+	this-month = log --since='$(date +%Y-%m-01)' --oneline --graph
+	yesterday = log --since='yesterday' --until='midnight' --oneline --graph
+	last-7-days = log --since='7 days ago' --oneline --graph
+	today-diff = log --since=midnight -p
+	today-me = log --since=midnight --author='$(git config user.name)' --oneline --graph
+	today-time = log --since=midnight --pretty=format:'%h %ad | %s [%an]' --date=short
+	last = log -1 --stat
+	clean-slate = reset --hard && git clean -fd
+	push-safe = push --force-with-lease
+	push-all = push --all
+	pull-safe = pull --ff-only
+	branches = branch -v
+	recent-branches = for-each-ref --sort=-committerdate --format='%(refname:short) - %(committerdate:relative)' refs/heads/
+	remote-branches = branch -r
+	ignored = ls-files --others --ignored --exclude-standard
+	top-contributors = shortlog -sn --all
+	config = config --list --global
+	squash = rebase -i HEAD~5
+	history = log --pretty=format:'%h %ad | %s [%an]' --date=short
+	edit-last = commit --amend
+	uncommit = reset --soft HEAD~1
+	modified = ls-files -m
+	pushNew = "!f() { git push --set-upstream origin $(git branch --show-current); }; f"
+	colast = checkout -
+	pull-rebase = pull --rebase
+	prep = pull --rebase
+	sync-safe = "!f() { git pull --ff-only && git push; }; f"
+	acp = !git add -p && read -p 'Commit message: ' msg && git commit -m \"\\$msg\" && git push
+	update-all = "!git fetch --all --prune && for branch in $(git branch --format=%(refname:short)); do git checkout $branch && git pull --ff-only; done && git checkout -"
+	snapshot = "!git stash push --include-untracked --message \"snapshot: $(date)\" && git stash apply \"stash@{0}\" --index"
+	chart = "!f() { git log --format='%aE %at' --since=6-weeks-ago \"$@\" | awk '\
+    function time_to_slot(t) { return strftime(\"%Y-%m-%d\", t, 1) } \
+    function count_to_char(i) { return (i > 0) ? ((i < 10) ? i : \"X\") : \".\" } \
+    BEGIN { time_min = systime(); time_max = 0; SECONDS_PER_DAY=86400; } \
+    { item = $1; time = 0 + $2; \
+      if (time > time_max){ time_max = time } else if (time < time_min){ time_min = time }; \
+      slot = time_to_slot(time); items[item]++; slots[slot]++; views[item, slot]++; } \
+    END { printf(\"Chart time range %s to %s.\\n\", time_to_slot(time_min), time_to_slot(time_max)); \
+      time_max_add = time_max + SECONDS_PER_DAY; \
+      for(item in items) { row = \"\"; \
+        for(time = time_min; time < time_max_add; time += SECONDS_PER_DAY) { \
+          slot = time_to_slot(time); count = views[item, slot]; row = row count_to_char(count); } \
+        print row, item; } }'; }; f"
+	current-branch = rev-parse --abbrev-ref HEAD
+	log-of-email-and-count = "!f() { git log-of-format-and-count \"%aE\" \"$@\"; }; f"
+	log-of-count-and-email = "!f() { git log-of-count-and-format \"%aE\" \"$@\"; }; f"
+	churn = "!f() { git log --all --find-copies --find-renames --name-only --format='format:' \"$@\" | awk 'NF{a[$0]++}END{for(i in a){print a[i], i}}' | sort -rn;};f"
+	log-of-count-and-day = "!f() { git log-of-count-and-format-with-date \"%ad\" \"%Y-%m-%d\" \"$@\" ; }; f"
+	log-of-count-and-format = "!f() { format=\"$1\"; shift; git log \"$@\" --format=oneline --format=\"$format\" | awk '{a[$0]++}END{for(i in a){print a[i], int((a[i]/NR)*100) \"%\", i}}' | sort -nr; }; f"
+	log-of-count-and-format-with-date = "!f() { format=\"$1\"; shift; date_format=\"$1\"; shift; git log \"$@\" --format=oneline --format=\"$format\" --date=format:\"$date_format\" | awk '{a[$0]++}END{for(i in a){print a[i], int((a[i]/NR)*100) \"%\", i}}' | sort -nr; }; f"
+	add-alias = "!f() { \
+		if [ $# != 3 ]; then \
+			echo \"Usage: git add-alias ( --local | --global ) <alias> <command>\"; \
+			echo \"Error: this command needs 3 arguments.\"; \
+			return 2; \
+		fi; \
+		if [ -n \"$(git config \"$1\" --get alias.\"$2\")\" ]; then \
+			echo \"Alias '$2' already exists, thus no change happened.\"; \
+			return 3; \
+		fi; \
+		git config \"$1\" alias.\"$2\" \"$3\" && \
+		return 0; \
+		echo \"Usage: git add-alias ( --local | --global ) <alias> <command>\"; \
+		echo \"Error: unknown failure.\"; \
+		return 1; \
+	}; f"
+	summary = "!f() { \
+		printf \"Summary of this branch...\n\"; \
+		printf \"%s\n\" \"$(git current-branch)\"; \
+		printf \"%s first commit timestamp\n\" \"$(git log --date-order --format=%cI | tail -1)\"; \
+		printf \"%s last commit timestamp\n\" \"$(git log -1 --date-order --format=%cI)\"; \
+		printf \"\nSummary of counts...\n\"; \
+		printf \"%d commit count\n\" \"$(git rev-list --count HEAD)\"; \
+		printf \"%d date count\n\" \"$(git log --format=oneline --format=\"%ad\" --date=format:\"%Y-%m-%d\" | awk '{a[$0]=1}END{for(i in a){n++;} print n}')\"; \
+		printf \"%d tag count\n\" \"$(git tag | wc -l)\"; \
+		printf \"%d author count\n\" \"$(git log --format=oneline --format=\"%aE\" | awk '{a[$0]=1}END{for(i in a){n++;} print n}')\"; \
+		printf \"%d committer count\n\" \"$(git log --format=oneline --format=\"%cE\" | awk '{a[$0]=1}END{for(i in a){n++;} print n}')\"; \
+		printf \"%d local branch count\n\" \"$(git branch | grep -vc \" -> \")\"; \
+		printf \"%d remote branch count\n\" \"$(git branch --remotes | grep -vc \" -> \")\"; \
+		printf \"\nSummary of this directory...\n\"; \
+		printf \"%s\n\" \"$(pwd)\"; \
+		printf \"%d file count via git ls-files\n\" \"$(git ls-files | wc -l)\"; \
+		printf \"%d file count via find command\n\" \"$(find . | wc -l)\"; \
+		printf \"%d disk usage\n\" \"$(du -s | awk '{print $1}')\"; \
+		printf \"\nMost-active authors, with commit count and %%...\n\"; git log-of-count-and-email | head -7; \
+		printf \"\nMost-active dates, with commit count and %%...\n\"; git log-of-count-and-day | head -7; \
+		printf \"\nMost-active files, with churn count\n\"; git churn | head -7; \
+	}; f"
+	rb = "!f() { echo fetching...; git fetch; if [ $? -eq 0 ]; then last_status=$(git status --untracked-files=no --porcelain); if [ \"$last_status\" != \"\" ]; then echo stashing local changes...; git stash; else echo nothing to stash...; fi; if [ $? -eq 0 ]; then echo rebasing...; git rebase; if [ $? -eq 0 ]; then if [ \"$last_status\" != \"\" ]; then echo applying stashed changes...; git stash pop; if [ $? -ne 0 ]; then echo STASH POP FAIL - you will need to resolve merge conflicts with git mergetool; fi; fi; else echo REBASE FAILED - you will need to manually run stash pop; fi; fi; fi; fi; if [ $? -ne 0 ]; then echo ERROR: Operation failed; fi; }; f"
+	fixmsh = !git commit --amend -m

@@ -1065,6 +1065,38 @@ function Set-GitDeltaAndDefaults {
         if ($code -eq 0) { Write-Ok "git config --global $key = $($configs[$key])" }
         else { Write-Fail "git config $key failed (exit $code)" }
     }
+
+    Install-GitAliases
+}
+
+function Install-GitAliases {
+    $source = Join-Path $PSScriptRoot 'git\aliases.gitconfig'
+    if (-not (Test-Path -LiteralPath $source)) {
+        Write-Skip 'git/aliases.gitconfig not in the installer folder'
+        return
+    }
+
+    New-Item -ItemType Directory -Path $script:DevTerminalDir -Force | Out-Null
+    $dest = Join-Path $script:DevTerminalDir 'git-aliases.gitconfig'
+    Copy-Item -LiteralPath $source -Destination $dest -Force
+    Write-Ok "Git aliases -> $dest"
+
+    $includePath = $dest.Replace('\', '/')
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $existing = @(& git config --global --get-all include.path 2>$null)
+    $ErrorActionPreference = $prev
+    $already = $existing | Where-Object {
+        $_ -and $_.Equals($includePath, [StringComparison]::OrdinalIgnoreCase)
+    }
+    if ($already) {
+        Write-Skip "git include.path already has $includePath"
+        return
+    }
+
+    $code = Invoke-External -FilePath 'git' -ArgumentList @('config', '--global', '--add', 'include.path', $includePath)
+    if ($code -eq 0) { Write-Ok "git config --global include.path += $includePath" }
+    else { Write-Fail "git include.path failed (exit $code)" }
 }
 
 # =============================================================================
