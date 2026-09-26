@@ -766,8 +766,75 @@ function Install-PsGalleryModules {
 }
 
 # =============================================================================
-# 4. Neovim bootstrap (lazy.nvim + seed keymaps, never overwrite keymaps.lua)
+# 4. Neovim bootstrap (lazy.nvim + Java/JS/Python/C++ plugins)
 # =============================================================================
+function Test-NvimFileManaged {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $true }
+    return [bool]($raw -match 'managed by setup\.ps1|generated/merged by setup\.ps1')
+}
+
+function Copy-NvimManagedTree {
+    param(
+        [Parameter(Mandatory)][string]$SourceRoot,
+        [Parameter(Mandatory)][string]$DestRoot
+    )
+    if (-not (Test-Path -LiteralPath $SourceRoot)) {
+        Write-Fail "Neovim config source missing: $SourceRoot"
+        return
+    }
+
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $files = @(Get-ChildItem -LiteralPath $SourceRoot -Recurse -File -ErrorAction Stop)
+    foreach ($file in $files) {
+        $rel = $file.FullName.Substring($SourceRoot.Length).TrimStart('\', '/')
+        $dest = Join-Path $DestRoot $rel
+        $isKeymaps = $rel -replace '\\', '/' -eq 'lua/config/keymaps.lua'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $dest) -Force | Out-Null
+
+        if ($isKeymaps) {
+            if (-not (Test-Path -LiteralPath $dest)) {
+                [System.IO.File]::WriteAllText($dest, [System.IO.File]::ReadAllText($file.FullName), $utf8)
+                Write-Ok "Seeded keymaps -> $dest"
+            }
+            else {
+                $existing = Get-Content -LiteralPath $dest -Raw -ErrorAction SilentlyContinue
+                if ($existing -notmatch 'NvimTreeToggle|<leader>e') {
+                    $extras = @'
+
+-- setup.ps1 plugin maps (appended once; edit freely)
+local map = vim.keymap.set
+map("n", "<leader>e", "<cmd>NvimTreeToggle<CR>", { desc = "File tree" })
+map("n", "<leader>o", "<cmd>NvimTreeFindFileToggle<CR>", { desc = "Tree reveal file" })
+map("n", "<leader>ff", "<cmd>Telescope find_files<CR>", { desc = "Find files" })
+map("n", "<leader>fg", "<cmd>Telescope live_grep<CR>", { desc = "Live grep" })
+map("n", "<leader>fb", "<cmd>Telescope buffers<CR>", { desc = "Buffers" })
+map("n", "<leader>gg", "<cmd>LazyGit<CR>", { desc = "Lazygit" })
+map("n", "<leader>tt", "<cmd>ToggleTerm<CR>", { desc = "Toggle terminal" })
+map("n", "<leader>xx", "<cmd>Trouble diagnostics toggle<CR>", { desc = "Trouble diagnostics" })
+'@
+                    Add-Content -LiteralPath $dest -Value $extras -Encoding utf8
+                    Write-Ok "Appended plugin keymaps to existing keymaps.lua"
+                }
+                else {
+                    Write-Skip 'Leaving existing keymaps.lua untouched'
+                }
+            }
+            continue
+        }
+
+        if ((Test-Path -LiteralPath $dest) -and -not (Test-NvimFileManaged $dest)) {
+            Write-Skip "Leaving user-owned nvim file: $rel"
+            continue
+        }
+
+        [System.IO.File]::WriteAllText($dest, [System.IO.File]::ReadAllText($file.FullName), $utf8)
+        Write-Ok "Nvim config -> $rel"
+    }
+}
+
 function Install-NvimBootstrap {
     if ($SkipNvimBootstrap) {
         Write-Skip 'Neovim bootstrap opted out'
@@ -778,13 +845,15 @@ function Install-NvimBootstrap {
         return
     }
 
-    Write-Step 'Neovim bootstrap (lazy.nvim + keymaps)'
+    Write-Step 'Neovim bootstrap (lazy.nvim + Java/JS/Python/C++ + file tree)'
+
+    if (-not (Test-HasCommand 'python') -and -not (Test-HasCommand 'python3') -and -not (Test-HasCommand 'py')) {
+        [void](Install-ScoopPackage -Name 'python')
+    }
 
     $nvimHome = Join-Path $env:LOCALAPPDATA 'nvim'
-    $luaConfig = Join-Path $nvimHome 'lua\config'
-    $luaPlugins = Join-Path $nvimHome 'lua\plugins'
-    New-Item -ItemType Directory -Path $luaConfig -Force | Out-Null
-    New-Item -ItemType Directory -Path $luaPlugins -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $nvimHome 'lua\config') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $nvimHome 'lua\plugins') -Force | Out-Null
     Write-Ok "Ensured $nvimHome (lua\config, lua\plugins)"
 
     $lazyPath = Join-Path $env:LOCALAPPDATA 'nvim-data\lazy\lazy.nvim'
@@ -803,85 +872,43 @@ function Install-NvimBootstrap {
         else { Write-Fail "git clone lazy.nvim failed (exit $code)" }
     }
     else {
-        Write-Skip "lazy.nvim already present"
+        Write-Skip 'lazy.nvim already present'
     }
+
+    Copy-NvimManagedTree -SourceRoot (Join-Path $PSScriptRoot 'nvim') -DestRoot $nvimHome
 
     $initPath = Join-Path $nvimHome 'init.lua'
-    $initLua = @'
--- Bootstrap generated/merged by setup.ps1 (safe to extend).
-local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
-if not (vim.uv or vim.loop).fs_stat(lazypath) then
-  vim.fn.system({
-    "git",
-    "clone",
-    "--filter=blob:none",
-    "--branch=stable",
-    "https://github.com/folke/lazy.nvim.git",
-    lazypath,
-  })
-end
-vim.opt.rtp:prepend(lazypath)
-
-require("lazy").setup("plugins")
-pcall(require, "config.keymaps")
-'@
-
-    if (-not (Test-Path -LiteralPath $initPath)) {
-        Set-Content -LiteralPath $initPath -Value $initLua -Encoding utf8
-        Write-Ok "Wrote $initPath"
-    }
-    else {
+    if (Test-Path -LiteralPath $initPath) {
         $existing = Get-Content -LiteralPath $initPath -Raw -ErrorAction SilentlyContinue
-        if ($existing -notmatch 'lazy\.nvim') {
-            Add-Content -LiteralPath $initPath -Value "`r`n`r`n-- appended by setup.ps1`r`n$initLua" -Encoding utf8
-            Write-Ok "Merged lazy.nvim bootstrap into existing init.lua"
+        if ($existing -notmatch 'config\.options') {
+            $utf8 = [System.Text.UTF8Encoding]::new($false)
+            [System.IO.File]::WriteAllText(
+                $initPath,
+                ($existing.TrimEnd() + "`r`npcall(require, `"config.options`")`r`n"),
+                $utf8
+            )
+            Write-Ok 'Appended config.options require to init.lua'
         }
-        elseif ($existing -notmatch 'config\.keymaps') {
+        if ($existing -notmatch 'config\.keymaps') {
             Add-Content -LiteralPath $initPath -Value "`r`npcall(require, `"config.keymaps`")" -Encoding utf8
-            Write-Ok "Appended config.keymaps require to existing init.lua"
+            Write-Ok 'Appended config.keymaps require to init.lua'
         }
-        else {
-            Write-Skip 'init.lua already bootstraps lazy.nvim and keymaps'
-        }
-    }
-
-    if (-not (Test-Path -LiteralPath $script:NvimKeymapsPath)) {
-        $keymaps = @'
--- Seeded by setup.ps1. Safe to edit; setup will never overwrite this file.
-vim.g.mapleader = " "
-vim.g.maplocalleader = " "
-
-local map = vim.keymap.set
-
--- Save / quit
-map("n", "<leader>w", "<cmd>write<CR>", { desc = "Save file" })
-map("n", "<leader>q", "<cmd>quit<CR>", { desc = "Quit window" })
-map("n", "<leader>Q", "<cmd>quitall<CR>", { desc = "Quit all" })
-map("n", "<leader>x", "<cmd>write | quit<CR>", { desc = "Save and quit" })
-
--- Window navigation
-map("n", "<C-h>", "<C-w>h", { desc = "Window left" })
-map("n", "<C-j>", "<C-w>j", { desc = "Window down" })
-map("n", "<C-k>", "<C-w>k", { desc = "Window up" })
-map("n", "<C-l>", "<C-w>l", { desc = "Window right" })
-
--- Buffer navigation
-map("n", "<S-h>", "<cmd>bprevious<CR>", { desc = "Previous buffer" })
-map("n", "<S-l>", "<cmd>bnext<CR>", { desc = "Next buffer" })
-map("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Delete buffer" })
-map("n", "[b", "<cmd>bprevious<CR>", { desc = "Previous buffer" })
-map("n", "]b", "<cmd>bnext<CR>", { desc = "Next buffer" })
-'@
-        Set-Content -LiteralPath $script:NvimKeymapsPath -Value $keymaps -Encoding utf8
-        Write-Ok "Seeded $($script:NvimKeymapsPath)"
-    }
-    else {
-        Write-Skip "Leaving existing keymaps.lua untouched"
     }
 
     [Environment]::SetEnvironmentVariable('NVIM_KEYMAPS_PATH', $script:NvimKeymapsPath, 'User')
     $env:NVIM_KEYMAPS_PATH = $script:NvimKeymapsPath
     Write-Ok "User env NVIM_KEYMAPS_PATH = $($script:NvimKeymapsPath)"
+
+    if (Test-HasCommand 'nvim') {
+        Write-Step 'Neovim plugin sync (first launch may still download Mason LSPs)'
+        $syncCode = Invoke-External -FilePath 'nvim' -ArgumentList @(
+            '--headless',
+            '+Lazy! sync',
+            '+qa'
+        )
+        if ($syncCode -eq 0) { Write-Ok 'lazy.nvim plugin sync finished' }
+        else { Write-Skip "lazy.nvim sync exited $syncCode (plugins install on first nvim launch)" }
+    }
 }
 
 # =============================================================================

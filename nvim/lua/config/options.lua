@@ -6,7 +6,9 @@ o.relativenumber = true
 o.signcolumn = "yes"
 o.cursorline = true
 o.termguicolors = true
-o.winborder = "rounded"
+pcall(function()
+  o.winborder = "rounded"
+end)
 
 o.tabstop = 4
 o.shiftwidth = 4

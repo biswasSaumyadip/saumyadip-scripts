@@ -17,7 +17,8 @@ After setup, open a **new** Windows Terminal tab. The prompt shows RAM on the ri
 | Command library (this profile) | `%LOCALAPPDATA%\dev-terminal\Microsoft.PowerShell_profile.ps1` |
 | pwsh `$PROFILE` (same file) | `Documents\PowerShell\Microsoft.PowerShell_profile.ps1` |
 | Oh My Posh theme (RAM on the right) | `%LOCALAPPDATA%\dev-terminal\dev-terminal.omp.json` |
-| Neovim keymaps seed | `%LOCALAPPDATA%\nvim\lua\config\keymaps.lua` |
+| Neovim config (plugins + LSPs) | `%LOCALAPPDATA%\nvim\` (`init.lua`, `lua\config`, `lua\plugins`) |
+| Neovim keymaps seed | `%LOCALAPPDATA%\nvim\lua\config\keymaps.lua` (never overwritten) |
 | Weekly updater wrapper | `%LOCALAPPDATA%\dev-terminal\Update-AllTheThings.ps1` |
 
 Do **not** use `-SkipProfileInstall` if you plan to delete this folder.
@@ -42,7 +43,7 @@ Idempotent. Safe to re-run. Requests UAC when not already elevated (fonts and th
 | --- | --- | --- |
 | `-SkipElevation` | off | Do not re-launch as Administrator |
 | `-SkipCoreTools` | off | Skip core Scoop tools |
-| `-SkipNvimBootstrap` | off | Do not seed Neovim lazy.nvim / keymaps |
+| `-SkipNvimBootstrap` | off | Do not install the Neovim plugin suite |
 | `-SkipCppStack` | off | Skip gcc / make / cmake |
 | `-SkipJavaStack` | off | Skip Corretto LTS, Gradle, Maven |
 | `-SkipNodeStack` | off | Skip fnm / pnpm |
@@ -233,6 +234,50 @@ In the shell, `Get-Help <Name> -Examples` works for every function below.
 | `zadd` | `Add-7ZipItem` |
 | `zrm` | `Remove-7ZipItem` |
 | `zx` | `Expand-7ZipArchive` |
+
+---
+
+## Neovim
+
+`setup.ps1` copies `nvim\` onto `%LOCALAPPDATA%\nvim` and clones [lazy.nvim](https://github.com/folke/lazy.nvim). Files marked `-- managed by setup.ps1` are refreshed on re-run. **`keymaps.lua` is never overwritten.**
+
+First `nvim` launch (or setup's headless `Lazy! sync`) downloads plugins. Mason then installs language servers the first time you open a matching file.
+
+### Languages
+
+| Language | LSP | Formatter |
+| --- | --- | --- |
+| Java | `jdtls` via nvim-jdtls (Maven / Gradle roots) | google-java-format |
+| JavaScript / TypeScript | `ts_ls` | prettier |
+| Python | basedpyright + ruff | ruff |
+| C / C++ | clangd | clang-format |
+| Lua, JSON, HTML, CSS, Bash | matching Mason LSPs | stylua / prettier |
+
+Need `java` on PATH for Java (Corretto from this setup). Python is installed via Scoop if missing. C++ uses the gcc/cmake stack when those options are enabled.
+
+### Plugins
+
+File tree (nvim-tree), Telescope, Treesitter, Mason + lspconfig, nvim-cmp + LuaSnip, Conform (format on save), gitsigns, lazygit, which-key, bufferline, lualine, tokyonight, Trouble, Comment, autopairs, surround, Flash jump, ToggleTerm, indent guides, todo-comments.
+
+### Neovim keys (leader = Space)
+
+| Key | Action |
+| --- | --- |
+| Space e | Toggle file tree |
+| Space o | Reveal current file in the tree |
+| Space ff / fg / fb / fr | Find files / grep / buffers / recent |
+| Space w / q / x | Save / quit / save+quit |
+| Ctrl-h/j/k/l | Move between windows |
+| Shift-h / Shift-l | Previous / next buffer |
+| gd / gr / K | Definition / references / hover |
+| Space ca / rn / f | Code action / rename / format |
+| Space xx | Trouble diagnostics |
+| Space gg | Lazygit |
+| Space tt / Ctrl-\\ | Floating terminal |
+| s | Flash jump |
+| gcc | Toggle comment |
+
+`:Mason` shows LSP install progress. `:Lazy` manages plugins.
 
 ---
 
