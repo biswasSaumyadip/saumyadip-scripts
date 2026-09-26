@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
+  "version": 3,
+  "final_space": true,
+  "console_title_template": "{{ .Shell }} in {{ .Folder }}",
+  "blocks": [
+    {
+      "type": "prompt",
+      "alignment": "left",
+      "segments": [
+        {
+          "type": "path",
+          "style": "plain",
+          "foreground": "#98c379",
+          "template": "{{ .Path }} ",
+          "properties": {
+            "style": "folder",
+            "home_icon": "~"
+          },
+          "options": {
+            "style": "folder",
+            "home_icon": "~"
+          }
+        },
+        {
+          "type": "git",
+          "style": "plain",
+          "foreground": "#c678dd",
+          "template": "{{ .HEAD }}{{ if .Working.Changed }}*{{ end }} "
+        },
+        {
+          "type": "status",
+          "style": "plain",
+          "foreground": "#98c379",
+          "foreground_templates": [
+            "{{ if gt .Code 0 }}#e06c75{{ end }}"
+          ],
+          "template": "{{ if gt .Code 0 }}x{{ else }}${{ end }} ",
+          "properties": {
+            "always_enabled": true
+          },
+          "options": {
+            "always_enabled": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "rprompt",
+      "overflow": "hidden",
+      "segments": [
+        {
+          "type": "sysinfo",
+          "style": "plain",
+          "foreground": "#56b6c2",
+          "foreground_templates": [
+            "{{ if gt .PhysicalPercentUsed 90 }}#e06c75{{ end }}",
+            "{{ if gt .PhysicalPercentUsed 70 }}#e5c07b{{ end }}"
+          ],
+          "template": "RAM {{ round .PhysicalPercentUsed .Precision }}% ",
+          "properties": {
+            "precision": 1
+          },
+          "options": {
+            "precision": 1
+          }
+        }
+      ]
+    }
+  ]
+}

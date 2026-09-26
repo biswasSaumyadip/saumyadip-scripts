@@ -1,0 +1,92 @@
+{
+  "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
+  "version": 3,
+  "final_space": true,
+  "console_title_template": "{{ .Shell }} in {{ .Folder }}",
+  "blocks": [
+    {
+      "type": "prompt",
+      "alignment": "left",
+      "segments": [
+        {
+          "type": "os",
+          "style": "diamond",
+          "leading_diamond": "\ue0b6",
+          "trailing_diamond": "\ue0b0",
+          "foreground": "#282c34",
+          "background": "#61afef",
+          "template": " {{ .Icon }} "
+        },
+        {
+          "type": "path",
+          "style": "powerline",
+          "powerline_symbol": "\ue0b0",
+          "foreground": "#282c34",
+          "background": "#98c379",
+          "template": " {{ .Path }} ",
+          "properties": {
+            "style": "folder",
+            "home_icon": "~"
+          },
+          "options": {
+            "style": "folder",
+            "home_icon": "~"
+          }
+        },
+        {
+          "type": "git",
+          "style": "powerline",
+          "powerline_symbol": "\ue0b0",
+          "foreground": "#282c34",
+          "background": "#c678dd",
+          "background_templates": [
+            "{{ if or (.Working.Changed) (.Staging.Changed) }}#e5c07b{{ end }}"
+          ],
+          "template": " {{ .HEAD }}{{ if .Working.Changed }} *{{ end }}{{ if .Staging.Changed }} +{{ end }} "
+        },
+        {
+          "type": "status",
+          "style": "diamond",
+          "trailing_diamond": "\ue0b4",
+          "foreground": "#ffffff",
+          "background": "#98c379",
+          "background_templates": [
+            "{{ if gt .Code 0 }}#e06c75{{ end }}"
+          ],
+          "template": " {{ if gt .Code 0 }}\u2718{{ else }}\u2714{{ end }} ",
+          "properties": {
+            "always_enabled": true
+          },
+          "options": {
+            "always_enabled": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "rprompt",
+      "overflow": "hidden",
+      "segments": [
+        {
+          "type": "sysinfo",
+          "style": "diamond",
+          "leading_diamond": "\ue0b6",
+          "trailing_diamond": "\ue0b4",
+          "foreground": "#282c34",
+          "background": "#56b6c2",
+          "background_templates": [
+            "{{ if gt .PhysicalPercentUsed 90 }}#e06c75{{ end }}",
+            "{{ if gt .PhysicalPercentUsed 70 }}#e5c07b{{ end }}"
+          ],
+          "template": " \ue266 RAM {{ round .PhysicalPercentUsed .Precision }}% ",
+          "properties": {
+            "precision": 1
+          },
+          "options": {
+            "precision": 1
+          }
+        }
+      ]
+    }
+  ]
+}
