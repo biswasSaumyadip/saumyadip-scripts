@@ -127,7 +127,9 @@ In the shell, `Get-Help <Name> -Examples` works for every function below.
 
 | Command | Description | Example |
 | --- | --- | --- |
-| `Kill-Port` | Force-kill every process listening on the given TCP port(s) | `Kill-Port 3000, 8080` |
+| `Kill-Port` / `Kill-ProcessByPort` / `killport` | Force-kill every process listening on the given TCP port(s) | `Kill-ProcessByPort 3000, 8080` |
+| `Kill-ProcessById` / `killpid` | Force-kill one or more processes by PID | `Kill-ProcessById 1234` |
+| `topProcess` / `Top-Process` | Live TUI of the heaviest processes. `-n` is row count (default 15). `Q` quits. `-Sort RAM` to rank by memory | `topProcess -n 20` |
 | `Test-Port` | Read-only TCP connect probe (does not kill) | `Test-Port -ComputerName localhost -Port 5432` |
 | `Get-MyIP` | Local IPv4, default gateway, public IP | `Get-MyIP` |
 | `Start-Serve` | HTTP-serve the current directory (binds `127.0.0.1`) | `Start-Serve -Port 8080` |
@@ -137,6 +139,9 @@ In the shell, `Get-Help <Name> -Examples` works for every function below.
 | Command | Description | Example |
 | --- | --- | --- |
 | `Get-SysResource` | CPU/RAM bars plus top 5 CPU and RAM processes | `Get-SysResource` |
+| `Get-DriveSpace` / `diskSpace` | C: (or `-Drive`) dashboard: used/free bar, reclaimable caches, watch-list (VHDX, pagefile, hibernation) | `Get-DriveSpace` |
+| `topDisk` | TUI of the largest items in a folder. `-n` is row count. Default is your user profile | `topDisk -n 20 $HOME` |
+| `Clear-DriveSpace` / `cleanDisk` | Delete safe temp/caches. Default: TEMP, Recycle Bin, Scoop/npm/pip. `-Deep` adds IDE caches. `-WhatIf` previews | `Clear-DriveSpace -WhatIf` |
 | `Invoke-RestTest` | Lightweight REST call with pretty-printed JSON | `Invoke-RestTest -Uri https://httpbin.org/get` |
 
 ### Files

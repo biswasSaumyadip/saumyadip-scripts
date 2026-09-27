@@ -808,6 +808,179 @@ function Kill-Port {
     }
 }
 
+function Kill-ProcessByPort {
+    <#
+    .SYNOPSIS
+        Kill the process(es) listening on a TCP port.
+    .DESCRIPTION
+        Same as Kill-Port: finds Listen owners via Get-NetTCPConnection
+        and Stop-Process -Force. Use this name when you think in "kill
+        by port" rather than the shorter Kill-Port alias.
+    .EXAMPLE
+        Kill-ProcessByPort 3000
+    .EXAMPLE
+        Kill-ProcessByPort 3000, 8080
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [int[]]$Port
+    )
+    Kill-Port -Port $Port
+}
+
+function Kill-ProcessById {
+    <#
+    .SYNOPSIS
+        Force-kill one or more processes by PID.
+    .DESCRIPTION
+        Looks up each Id with Get-Process, prints the name, then
+        Stop-Process -Force. Missing PIDs are reported and skipped.
+    .EXAMPLE
+        Kill-ProcessById 1234
+    .EXAMPLE
+        Kill-ProcessById 1234, 5678
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [int[]]$Id
+    )
+    foreach ($procId in $Id) {
+        if ($procId -le 0) {
+            Write-Host "Skipping invalid PID $procId" -ForegroundColor DarkYellow
+            continue
+        }
+        $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+        if (-not $proc) {
+            Write-Host "No process with PID $procId" -ForegroundColor DarkYellow
+            continue
+        }
+        $label = $proc.ProcessName
+        if ($PSCmdlet.ShouldProcess("$label ($procId)", 'Stop-Process -Force')) {
+            Stop-Process -Id $procId -Force -ErrorAction Stop
+            Write-Host "Killed $label ($procId)" -ForegroundColor Green
+        }
+    }
+}
+
+function topProcess {
+    <#
+    .SYNOPSIS
+        Live TUI of the heaviest processes (count via -n).
+    .DESCRIPTION
+        Refreshes a colored CPU/RAM table in the console. -n is how many
+        rows to show (default 15). Q quits. CPU% is sampled between
+        frames. Prefer this over `top` when you want a count-limited view
+        without launching btop.
+    .EXAMPLE
+        topProcess
+    .EXAMPLE
+        topProcess -n 25
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [Alias('n')]
+        [ValidateRange(1, 80)]
+        [int]$Count = 15,
+        [ValidateSet('CPU', 'RAM')]
+        [string]$Sort = 'CPU',
+        [ValidateRange(0.3, 10)]
+        [double]$IntervalSec = 1
+    )
+    $logical = [math]::Max(1, [Environment]::ProcessorCount)
+    $prevCpu = @{}
+    $prevAt = Get-Date
+    $hideCursor = $false
+    try { [Console]::CursorVisible = $false; $hideCursor = $true } catch { }
+
+    try {
+        while ($true) {
+            $now = Get-Date
+            $elapsed = [math]::Max(0.2, ($now - $prevAt).TotalSeconds)
+            $prevAt = $now
+            $procs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne 0 })
+            $rows = foreach ($p in $procs) {
+                $cpuSec = 0.0
+                try { $cpuSec = [double]$p.CPU } catch { }
+                $prev = $prevCpu[$p.Id]
+                $cpuPct = if ($null -ne $prev) {
+                    [math]::Max(0, [math]::Round((($cpuSec - $prev) / $elapsed / $logical) * 100, 1))
+                }
+                else { 0 }
+                $prevCpu[$p.Id] = $cpuSec
+                [pscustomobject]@{
+                    PID    = $p.Id
+                    Name   = $p.ProcessName
+                    CpuPct = $cpuPct
+                    RamMb  = [math]::Round($p.WorkingSet64 / 1MB, 1)
+                }
+            }
+            $sorted = if ($Sort -eq 'RAM') {
+                $rows | Sort-Object RamMb -Descending
+            }
+            else {
+                $rows | Sort-Object CpuPct -Descending
+            }
+            $top = @($sorted | Select-Object -First $Count)
+
+            $ramPct = 0; $ramUsed = 0; $ramTotal = 0
+            try {
+                $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+                $totalKb = [double]$os.TotalVisibleMemorySize
+                $freeKb = [double]$os.FreePhysicalMemory
+                if ($totalKb -gt 0) {
+                    $ramPct = [math]::Round((($totalKb - $freeKb) / $totalKb) * 100, 1)
+                }
+                $ramUsed = [math]::Round(($totalKb - $freeKb) / 1MB, 2)
+                $ramTotal = [math]::Round($totalKb / 1MB, 2)
+            }
+            catch { }
+
+            Clear-Host
+            Write-Host ""
+            Write-Host '  topProcess' -NoNewline -ForegroundColor Cyan
+            Write-Host ("  ·  {0}  ·  top {1} by {2}  ·  Q quit" -f $now.ToString('HH:mm:ss'), $Count, $Sort) -ForegroundColor DarkGray
+            Write-Host -NoNewline '  RAM  '
+            _Write-PercentBar -Percent $ramPct
+            if ($ramTotal -gt 0) { Write-Host ("  {0} / {1} GB" -f $ramUsed, $ramTotal) } else { Write-Host "" }
+            Write-Host ""
+            Write-Host ('  {0,7}  {1,-28}  {2,7}  {3,10}' -f 'PID', 'NAME', 'CPU%', 'RAM MB') -ForegroundColor DarkCyan
+            Write-Host ('  ' + ('─' * 62)) -ForegroundColor DarkCyan
+            foreach ($row in $top) {
+                $name = $row.Name
+                if ($name.Length -gt 28) { $name = $name.Substring(0, 27) + '…' }
+                $cpuColor = if ($row.CpuPct -ge 80) { 'Red' } elseif ($row.CpuPct -ge 40) { 'Yellow' } else { 'Green' }
+                Write-Host -NoNewline ('  {0,7}  {1,-28}  ' -f $row.PID, $name)
+                Write-Host -NoNewline ('{0,6:N1}%' -f $row.CpuPct) -ForegroundColor $cpuColor
+                Write-Host ('  {0,10:N1}' -f $row.RamMb)
+            }
+            Write-Host ""
+            Write-Host '  Kill-ProcessById <PID>   ·   Kill-ProcessByPort <port>' -ForegroundColor DarkGray
+            Write-Host ""
+
+            $deadline = [datetime]::UtcNow.AddSeconds($IntervalSec)
+            while ([datetime]::UtcNow -lt $deadline) {
+                try {
+                    if ([Console]::KeyAvailable) {
+                        $key = [Console]::ReadKey($true)
+                        if ($key.Key -eq 'Q' -or $key.KeyChar -eq 'q') { return }
+                    }
+                }
+                catch {
+                    Start-Sleep -Seconds $IntervalSec
+                    break
+                }
+                Start-Sleep -Milliseconds 80
+            }
+        }
+    }
+    finally {
+        if ($hideCursor) { try { [Console]::CursorVisible = $true } catch { } }
+    }
+}
+
 function Test-Port {
     <#
     .SYNOPSIS
@@ -1001,6 +1174,558 @@ function Get-SysResource {
     $d.TopRam | ForEach-Object {
         '{0,8}  {1,-28}  CPU={2,10:N1}  RAM={3,7:N1} MB' -f $_.Id, $_.ProcessName, $_.CPU, ($_.WorkingSet64 / 1MB)
     } | Write-Host
+    Write-Host ""
+}
+
+function _Format-ByteSize {
+    param($Bytes)
+    if ($null -eq $Bytes) { return '—' }
+    $n = [double]$Bytes
+    if ($n -lt 0) { return '—' }
+    if ($n -ge 1TB) { return ('{0:N2} TB' -f ($n / 1TB)) }
+    if ($n -ge 1GB) { return ('{0:N2} GB' -f ($n / 1GB)) }
+    if ($n -ge 1MB) { return ('{0:N1} MB' -f ($n / 1MB)) }
+    if ($n -ge 1KB) { return ('{0:N0} KB' -f ($n / 1KB)) }
+    return ('{0:N0} B' -f $n)
+}
+
+function _Resolve-DriveLetter {
+    param([Parameter(Mandatory)][string]$Drive)
+    $ch = $Drive.Trim().TrimEnd('\').TrimEnd(':')
+    if ($ch.Length -ne 1 -or $ch -notmatch '^[A-Za-z]$') {
+        throw "Drive must be a single letter (got '$Drive')."
+    }
+    return $ch.ToUpperInvariant()
+}
+
+function _Get-PathSizeInfo {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [int]$MaxSeconds = 12
+    )
+    $missing = [pscustomobject]@{ Bytes = $null; TimedOut = $false; Exists = $false }
+    if (-not (Test-Path -LiteralPath $Path)) { return $missing }
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return $missing }
+    if (-not $item.PSIsContainer) {
+        return [pscustomobject]@{ Bytes = [long]$item.Length; TimedOut = $false; Exists = $true }
+    }
+    $deadline = [datetime]::UtcNow.AddSeconds([math]::Max(2, $MaxSeconds))
+    $bytes = [long]0
+    $timedOut = $false
+    $stack = [System.Collections.Generic.Stack[string]]::new()
+    $stack.Push($item.FullName)
+    while ($stack.Count -gt 0) {
+        if ([datetime]::UtcNow -ge $deadline) { $timedOut = $true; break }
+        $dir = $stack.Pop()
+        try {
+            $di = [System.IO.DirectoryInfo]::new($dir)
+            if ($di.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+            foreach ($f in $di.EnumerateFiles()) {
+                try { $bytes += $f.Length } catch { }
+            }
+            foreach ($sub in $di.EnumerateDirectories()) {
+                if ($sub.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                $stack.Push($sub.FullName)
+            }
+        }
+        catch { }
+    }
+    return [pscustomobject]@{ Bytes = $bytes; TimedOut = $timedOut; Exists = $true }
+}
+
+function _Get-RecycleBinBytes {
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $bin = $shell.NameSpace(10)
+        if (-not $bin) { return $null }
+        $sum = [long]0
+        foreach ($entry in @($bin.Items())) {
+            try { $sum += [int64]$entry.Size } catch { }
+        }
+        return $sum
+    }
+    catch { return $null }
+}
+
+function _Get-DriveSpaceTargets {
+    param([Parameter(Mandatory)][string]$Letter)
+    $root = "${Letter}:\"
+    $la = $env:LOCALAPPDATA
+    $userHome = $env:USERPROFILE
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $add = {
+        param($Name, $Path, $Bucket, $Safe, $Hint, $Kind)
+        if ([string]::IsNullOrWhiteSpace($Path)) { return }
+        $rows.Add([pscustomobject]@{
+                Name   = $Name
+                Path   = $Path
+                Bucket = $Bucket
+                Safe   = [bool]$Safe
+                Hint   = $Hint
+                Kind   = $(if ($Kind) { $Kind } else { 'path' })
+            })
+    }
+    & $add 'User TEMP' $env:TEMP 'Temp' $true 'locked files are skipped' 'path'
+    $localTemp = Join-Path $la 'Temp'
+    if ($env:TEMP -and $localTemp -and ([IO.Path]::GetFullPath($env:TEMP) -ne [IO.Path]::GetFullPath($localTemp))) {
+        & $add 'LocalAppData TEMP' $localTemp 'Temp' $true '' 'path'
+    }
+    & $add 'Windows TEMP' (Join-Path $root 'Windows\Temp') 'Temp' $true 'needs admin for some files' 'path'
+    & $add 'Recycle Bin' (Join-Path $root '$Recycle.Bin') 'Recycle' $true 'Clear-RecycleBin' 'recycle'
+    & $add 'Crash dumps' (Join-Path $la 'CrashDumps') 'Dumps' $true '' 'path'
+    & $add 'WER (user)' (Join-Path $la 'Microsoft\Windows\WER') 'Dumps' $true '' 'path'
+    & $add 'INet cache' (Join-Path $la 'Microsoft\Windows\INetCache') 'Temp' $true '' 'path'
+    & $add 'Delivery Optimization' (Join-Path $la 'Microsoft\Windows\DeliveryOptimization') 'Temp' $true '' 'path'
+    & $add 'Thumbnails' (Join-Path $la 'Microsoft\Windows\Explorer') 'Thumbs' $true 'thumbcache_*.db / iconcache*' 'thumbs'
+    $scoopCache = Join-Path $userHome 'scoop\cache'
+    & $add 'Scoop cache' $scoopCache 'Dev' $true 'scoop cache rm *' 'path'
+    if ($env:SCOOP) {
+        $scoopEnvCache = Join-Path $env:SCOOP 'cache'
+        if ([IO.Path]::GetFullPath($scoopEnvCache) -ne [IO.Path]::GetFullPath($scoopCache)) {
+            & $add 'Scoop cache (SCOOP)' $scoopEnvCache 'Dev' $true '' 'path'
+        }
+    }
+    & $add 'WinGet temp' (Join-Path $la 'Temp\WinGet') 'Dev' $true '' 'path'
+    & $add 'npm cache' (Join-Path $la 'npm-cache') 'Dev' $true 'npm cache clean --force' 'path'
+    & $add 'npm cache (home)' (Join-Path $userHome '.npm') 'Dev' $true '' 'path'
+    & $add 'Yarn cache' (Join-Path $la 'Yarn\Cache') 'Dev' $true '' 'path'
+    & $add 'pip cache' (Join-Path $la 'pip\Cache') 'Dev' $true 'pip cache purge' 'path'
+    & $add 'NuGet http-cache' (Join-Path $userHome '.nuget\http-cache') 'Dev' $true '' 'path'
+    & $add 'NuGet v3-cache' (Join-Path $la 'NuGet\v3-cache') 'Dev' $true '' 'path'
+    & $add 'NuGet packages' (Join-Path $userHome '.nuget\packages') 'Watch' $false 're-downloads on next restore' 'path'
+    & $add 'pnpm store' (Join-Path $la 'pnpm-store') 'Watch' $false 'pnpm store prune — do not delete the store' 'path'
+    & $add 'pnpm (LocalAppData)' (Join-Path $la 'pnpm') 'Watch' $false 'pnpm store prune' 'path'
+    & $add 'Maven repo' (Join-Path $userHome '.m2\repository') 'Watch' $false 'next build re-fetches deps' 'path'
+    & $add 'Gradle caches' (Join-Path $userHome '.gradle\caches') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'Cursor Cache' (Join-Path $la 'cursor\Cache') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'Cursor CachedData' (Join-Path $la 'cursor\CachedData') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'Cursor GPUCache' (Join-Path $la 'cursor\GPUCache') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'Cursor Code Cache' (Join-Path $la 'cursor\Code Cache') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'Cursor logs' (Join-Path $la 'cursor\logs') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'VS Code Cache' (Join-Path $la 'Code\Cache') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'VS Code CachedData' (Join-Path $la 'Code\CachedData') 'DevDeep' $true 'Clear-DriveSpace -Deep' 'path'
+    & $add 'Edge cache' (Join-Path $la 'Microsoft\Edge\User Data\Default\Cache') 'Browser' $true 'close Edge first' 'path'
+    & $add 'Chrome cache' (Join-Path $la 'Google\Chrome\User Data\Default\Cache') 'Browser' $true 'close Chrome first' 'path'
+    & $add 'Windows Update downloads' (Join-Path $root 'Windows\SoftwareDistribution\Download') 'WindowsUpdate' $true 'needs admin; service restarted' 'path'
+    & $add 'Windows.old' (Join-Path $root 'Windows.old') 'Watch' $false 'Settings > Storage or cleanmgr' 'path'
+    & $add 'hiberfil.sys' (Join-Path $root 'hiberfil.sys') 'Watch' $false 'powercfg /hibernate off' 'file'
+    & $add 'pagefile.sys' (Join-Path $root 'pagefile.sys') 'Watch' $false 'leave unless you moved paging' 'file'
+    & $add 'swapfile.sys' (Join-Path $root 'swapfile.sys') 'Watch' $false '' 'file'
+    & $add 'Docker WSL VHDX' (Join-Path $la 'Docker\wsl\disk\docker_data.vhdx') 'Watch' $false 'dprune, then compact the VHDX' 'file'
+    $pkg = Join-Path $la 'Packages'
+    if (Test-Path -LiteralPath $pkg) {
+        Get-ChildItem -LiteralPath $pkg -Filter 'ext4.vhdx' -Recurse -File -Force -Depth 3 -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $distro = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $_.FullName))
+                & $add "WSL VHDX ($distro)" $_.FullName 'Watch' $false 'wsl --shutdown, then compact the VHDX' 'file'
+            }
+    }
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $unique = [System.Collections.Generic.List[object]]::new()
+    foreach ($row in $rows) {
+        $key = $row.Path
+        try { $key = [IO.Path]::GetFullPath($row.Path) } catch { }
+        if ($seen.Add($key)) { [void]$unique.Add($row) }
+    }
+    return $unique
+}
+
+function _Clear-DirectoryContents {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string[]]$NameLike
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]@{ Freed = [long]0; Errors = 0; Missing = $true }
+    }
+    $items = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)
+    if ($NameLike) {
+        $items = @($items | Where-Object {
+                foreach ($pat in $NameLike) { if ($_.Name -like $pat) { return $true } }
+                $false
+            })
+    }
+    $freed = [long]0
+    $errors = 0
+    foreach ($item in $items) {
+        $size = [long]0
+        if ($item.PSIsContainer) {
+            $info = _Get-PathSizeInfo -Path $item.FullName -MaxSeconds 8
+            if ($null -ne $info.Bytes) { $size = [long]$info.Bytes }
+        }
+        else {
+            $size = [long]$item.Length
+        }
+        try {
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+            $freed += $size
+        }
+        catch { $errors++ }
+    }
+    return [pscustomobject]@{ Freed = $freed; Errors = $errors; Missing = $false }
+}
+
+function Get-DriveSpace {
+    <#
+    .SYNOPSIS
+        Terminal dashboard of what is eating a drive (C: by default).
+    .DESCRIPTION
+        Shows used/free with a bar, then sizes the usual Windows and
+        developer caches. Safe buckets can be cleared with Clear-DriveSpace.
+        Large system files (pagefile, WinSxS, WSL VHDX) are listed as watch
+        items — do not delete those by hand. Use topDisk -n to hunt a folder.
+    .EXAMPLE
+        Get-DriveSpace
+    .EXAMPLE
+        Get-DriveSpace -Drive C
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Drive = 'C'
+    )
+    $letter = _Resolve-DriveLetter $Drive
+    $vol = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='${letter}:'" -ErrorAction SilentlyContinue
+    if (-not $vol) { throw "Drive ${letter}: not found." }
+
+    $total = [double]$vol.Size
+    $free = [double]$vol.FreeSpace
+    $used = $total - $free
+    $pct = if ($total -gt 0) { [math]::Round(($used / $total) * 100, 1) } else { 0 }
+
+    Write-Host ""
+    Write-Host -NoNewline "  Drive ${letter}:" -ForegroundColor Cyan
+    Write-Host ("  ·  {0}  {1}" -f $vol.VolumeName, $vol.FileSystem) -ForegroundColor DarkGray
+    Write-Host -NoNewline '  '
+    _Write-PercentBar -Percent $pct
+    Write-Host ("   {0} used   {1} free   {2} total" -f (_Format-ByteSize $used), (_Format-ByteSize $free), (_Format-ByteSize $total))
+    Write-Host ""
+
+    $targets = @(_Get-DriveSpaceTargets -Letter $letter)
+    Write-Host '  Measuring known caches…' -ForegroundColor DarkGray
+    $walker = ${function:_Get-PathSizeInfo}.ToString()
+    $recycleFn = ${function:_Get-RecycleBinBytes}.ToString()
+    $measured = @(
+        $targets | ForEach-Object -Parallel {
+            $row = $_
+            $bytes = $null
+            $timedOut = $false
+            $exists = $false
+            if ($row.Kind -eq 'recycle') {
+                $exists = Test-Path -LiteralPath $row.Path
+                $sb = [scriptblock]::Create($using:recycleFn)
+                $bytes = & $sb
+                if ($null -eq $bytes -and $exists) {
+                    $sizeSb = [scriptblock]::Create($using:walker)
+                    $info = & $sizeSb $row.Path 8
+                    $bytes = $info.Bytes
+                    $timedOut = [bool]$info.TimedOut
+                }
+            }
+            elseif (Test-Path -LiteralPath $row.Path) {
+                $exists = $true
+                $sizeSb = [scriptblock]::Create($using:walker)
+                $info = & $sizeSb $row.Path 12
+                $bytes = $info.Bytes
+                $timedOut = [bool]$info.TimedOut
+            }
+            [pscustomobject]@{
+                Name     = $row.Name
+                Path     = $row.Path
+                Bucket   = $row.Bucket
+                Safe     = $row.Safe
+                Hint     = $row.Hint
+                Bytes    = $bytes
+                TimedOut = $timedOut
+                Exists   = $exists
+            }
+        } -ThrottleLimit 8
+    )
+
+    $visible = @($measured | Where-Object { $_.Exists -and $null -ne $_.Bytes -and $_.Bytes -gt 0 } | Sort-Object Bytes -Descending)
+    $safe = @($visible | Where-Object { $_.Safe })
+    $watch = @($visible | Where-Object { -not $_.Safe })
+
+    $writeRow = {
+        param($row)
+        $label = $row.Name
+        if ($label.Length -gt 28) { $label = $label.Substring(0, 27) + '…' }
+        $sizeText = _Format-ByteSize $row.Bytes
+        if ($row.TimedOut) { $sizeText = '~' + $sizeText + '+' }
+        $color = if ($row.Bytes -ge 2GB) { 'Red' } elseif ($row.Bytes -ge 400MB) { 'Yellow' } else { 'Green' }
+        Write-Host -NoNewline ('  {0,-28}  ' -f $label)
+        Write-Host -NoNewline ('{0,10}' -f $sizeText) -ForegroundColor $color
+        if ($row.Hint) { Write-Host ("  {0}" -f $row.Hint) -ForegroundColor DarkGray }
+        else { Write-Host "" }
+    }
+
+    $reclaim = [long]0
+    foreach ($s in $safe) { $reclaim += [long]$s.Bytes }
+
+    Write-Host '  Safe to reclaim  (Clear-DriveSpace)' -ForegroundColor Green
+    if ($safe.Count -eq 0) {
+        Write-Host '    nothing large in the usual temp/cache spots' -ForegroundColor DarkGray
+    }
+    else {
+        foreach ($row in $safe) { & $writeRow $row }
+        Write-Host ('  {0,-28}  {1,10}' -f 'Reclaimable ~', (_Format-ByteSize $reclaim)) -ForegroundColor Cyan
+    }
+    Write-Host ""
+
+    Write-Host '  Watch  (do not delete by hand)' -ForegroundColor Yellow
+    if ($watch.Count -eq 0) {
+        Write-Host '    no large pagefile / VHDX / package-store hits' -ForegroundColor DarkGray
+    }
+    else {
+        foreach ($row in $watch) { & $writeRow $row }
+    }
+    Write-Host ""
+    Write-Host '  C: fills because Users, pagefile, hibernation, WSL/Docker VHDX,' -ForegroundColor DarkGray
+    Write-Host '  WinSxS, and every package cache default here — bigger disks still fill.' -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host ("  topDisk -n 20 {0}" -f $env:USERPROFILE) -ForegroundColor DarkGray
+    Write-Host '  Clear-DriveSpace            # temp, recycle, scoop/npm/pip caches' -ForegroundColor DarkGray
+    Write-Host '  Clear-DriveSpace -Deep      # plus gradle, IDE caches, dumps, thumbs' -ForegroundColor DarkGray
+    Write-Host '  Start-Process cleanmgr      # Windows Disk Cleanup / Storage Sense' -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+function topDisk {
+    <#
+    .SYNOPSIS
+        TUI of the largest items in a folder (count via -n).
+    .DESCRIPTION
+        Sizes each immediate child (skips junctions) and prints a colored
+        table. Default path is your user profile — the usual C: hog.
+        -n is how many rows (default 15). For a deeper tree, dust is used
+        when installed.
+    .EXAMPLE
+        topDisk
+    .EXAMPLE
+        topDisk -n 20 C:\
+    .EXAMPLE
+        topDisk -n 15 $env:LOCALAPPDATA
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Path = $HOME,
+        [Parameter(Position = 1)]
+        [Alias('n')]
+        [ValidateRange(1, 80)]
+        [int]$Count = 15,
+        [ValidateRange(1, 6)]
+        [int]$Depth = 1
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Path not found: $Path" }
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+
+    $driveLetter = $null
+    if ($resolved -match '^([A-Za-z]):') { $driveLetter = $Matches[1].ToUpperInvariant() }
+    if ($driveLetter) {
+        $vol = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='${driveLetter}:'" -ErrorAction SilentlyContinue
+        if ($vol -and $vol.Size -gt 0) {
+            $pct = [math]::Round((($vol.Size - $vol.FreeSpace) / $vol.Size) * 100, 1)
+            Write-Host ""
+            Write-Host -NoNewline "  topDisk" -ForegroundColor Cyan
+            Write-Host ("  ·  {0}  ·  top {1}" -f $resolved, $Count) -ForegroundColor DarkGray
+            Write-Host -NoNewline '  '
+            _Write-PercentBar -Percent $pct
+            Write-Host ("   {0} free on {1}:" -f (_Format-ByteSize $vol.FreeSpace), $driveLetter)
+        }
+    }
+    else {
+        Write-Host ""
+        Write-Host -NoNewline "  topDisk" -ForegroundColor Cyan
+        Write-Host ("  ·  {0}  ·  top {1}" -f $resolved, $Count) -ForegroundColor DarkGray
+    }
+
+    if ($Depth -gt 1 -and (_Test-HasCommand 'dust')) {
+        Write-Host ""
+        dust -d $Depth -n $Count $resolved
+        Write-Host ""
+        return
+    }
+
+    Write-Host '  Scanning children…' -ForegroundColor DarkGray
+    $children = @(Get-ChildItem -LiteralPath $resolved -Force -ErrorAction SilentlyContinue | Where-Object {
+            -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
+        })
+    $walker = ${function:_Get-PathSizeInfo}.ToString()
+    $rows = @(
+        $children | ForEach-Object -Parallel {
+            $item = $_
+            $sizeSb = [scriptblock]::Create($using:walker)
+            $info = & $sizeSb $item.FullName 20
+            [pscustomobject]@{
+                Name     = $item.Name
+                Path     = $item.FullName
+                IsDir    = [bool]$item.PSIsContainer
+                Bytes    = $(if ($null -eq $info.Bytes) { [long]0 } else { [long]$info.Bytes })
+                TimedOut = [bool]$info.TimedOut
+            }
+        } -ThrottleLimit 8
+    )
+    $top = @($rows | Sort-Object Bytes -Descending | Select-Object -First $Count)
+
+    Write-Host ""
+    Write-Host ('  {0,-40}  {1,10}  {2}' -f 'NAME', 'SIZE', '') -ForegroundColor DarkCyan
+    Write-Host ('  ' + ('─' * 58)) -ForegroundColor DarkCyan
+    foreach ($row in $top) {
+        $name = $row.Name
+        if ($name.Length -gt 40) { $name = $name.Substring(0, 39) + '…' }
+        if ($row.IsDir) { $name = $name + '/' }
+        $sizeText = _Format-ByteSize $row.Bytes
+        if ($row.TimedOut) { $sizeText = '~' + $sizeText + '+' }
+        $color = if ($row.Bytes -ge 5GB) { 'Red' } elseif ($row.Bytes -ge 1GB) { 'Yellow' } else { 'Green' }
+        Write-Host -NoNewline ('  {0,-40}  ' -f $name)
+        Write-Host ('{0,10}' -f $sizeText) -ForegroundColor $color
+    }
+    Write-Host ""
+    Write-Host '  Drill in:  topDisk -n 20 <folder>   ·   Clear-DriveSpace' -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+function Clear-DriveSpace {
+    <#
+    .SYNOPSIS
+        Reclaim disk space from safe temp and package caches (C: by default).
+    .DESCRIPTION
+        Default pass: user/Windows TEMP, Recycle Bin, Scoop/npm/pip/NuGet
+        HTTP caches, WinGet temp. -Deep adds Gradle, Cursor/VS Code caches,
+        crash dumps, and thumbnails. -Browser and -WindowsUpdate are opt-in
+        (close browsers; Update needs admin). Never deletes WinSxS, pagefile,
+        hiberfil, WSL/Docker VHDX, or package stores (pnpm/NuGet/Maven).
+        -WhatIf previews. Locked files are skipped.
+    .EXAMPLE
+        Clear-DriveSpace -WhatIf
+    .EXAMPLE
+        Clear-DriveSpace
+    .EXAMPLE
+        Clear-DriveSpace -Deep
+    .EXAMPLE
+        Clear-DriveSpace -Browser -WindowsUpdate
+    #>
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+    param(
+        [string]$Drive = 'C',
+        [switch]$Temp,
+        [switch]$Recycle,
+        [switch]$Dev,
+        [switch]$Dumps,
+        [switch]$Thumbs,
+        [switch]$Browser,
+        [switch]$WindowsUpdate,
+        [switch]$Deep,
+        [switch]$All
+    )
+    $letter = _Resolve-DriveLetter $Drive
+    $any = $Temp -or $Recycle -or $Dev -or $Dumps -or $Thumbs -or $Browser -or $WindowsUpdate -or $Deep -or $All
+    if (-not $any) {
+        $Temp = $true
+        $Recycle = $true
+        $Dev = $true
+    }
+    if ($Deep -or $All) {
+        $Temp = $true
+        $Recycle = $true
+        $Dev = $true
+        $Dumps = $true
+        $Thumbs = $true
+    }
+    if ($All) {
+        $Browser = $true
+        $WindowsUpdate = $true
+    }
+
+    $want = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    if ($Temp) { [void]$want.Add('Temp') }
+    if ($Recycle) { [void]$want.Add('Recycle') }
+    if ($Dev) { [void]$want.Add('Dev') }
+    if ($Deep -or $All) { [void]$want.Add('DevDeep') }
+    if ($Dumps) { [void]$want.Add('Dumps') }
+    if ($Thumbs) { [void]$want.Add('Thumbs') }
+    if ($Browser) { [void]$want.Add('Browser') }
+    if ($WindowsUpdate) { [void]$want.Add('WindowsUpdate') }
+
+    $targets = @(_Get-DriveSpaceTargets -Letter $letter | Where-Object { $_.Safe -and $want.Contains($_.Bucket) })
+    $totalFreed = [long]0
+    $totalErrors = 0
+
+    foreach ($t in $targets) {
+        if (-not (Test-Path -LiteralPath $t.Path)) { continue }
+        if (-not $PSCmdlet.ShouldProcess($t.Path, "Clear $($t.Name)")) { continue }
+
+        if ($t.Bucket -eq 'Recycle') {
+            try {
+                Clear-RecycleBin -DriveLetter $letter -Force -ErrorAction Stop
+                Write-Host "  Cleared Recycle Bin on ${letter}:" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "  Recycle Bin: $($_.Exception.Message)" -ForegroundColor DarkYellow
+                $totalErrors++
+            }
+            continue
+        }
+
+        if ($t.Bucket -eq 'WindowsUpdate' -and -not (_Test-IsElevated)) {
+            Write-Host '  Windows Update downloads need an elevated pwsh — skipped' -ForegroundColor DarkYellow
+            continue
+        }
+
+        if ($t.Name -eq 'Scoop cache' -or $t.Name -eq 'Scoop cache (SCOOP)') {
+            if (_Test-HasCommand 'scoop') {
+                $prev = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                scoop cache rm *
+                $ErrorActionPreference = $prev
+                Write-Host "  scoop cache rm *  ($($t.Path))" -ForegroundColor Green
+                continue
+            }
+        }
+        if ($t.Name -eq 'npm cache' -or $t.Name -eq 'npm cache (home)') {
+            if (_Test-HasCommand 'npm') {
+                $prev = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                npm cache clean --force
+                $ErrorActionPreference = $prev
+                Write-Host "  npm cache clean --force" -ForegroundColor Green
+                continue
+            }
+        }
+        if ($t.Name -eq 'pip cache' -and (_Test-HasCommand 'pip')) {
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            pip cache purge
+            $ErrorActionPreference = $prev
+            Write-Host '  pip cache purge' -ForegroundColor Green
+            continue
+        }
+
+        $filter = $null
+        if ($t.Kind -eq 'thumbs') { $filter = @('thumbcache_*.db', 'iconcache*') }
+        $result = _Clear-DirectoryContents -Path $t.Path -NameLike $filter
+        $totalFreed += [long]$result.Freed
+        $totalErrors += [int]$result.Errors
+        $msg = "  {0}: freed {1}" -f $t.Name, (_Format-ByteSize $result.Freed)
+        if ($result.Errors -gt 0) { $msg += "  ($($result.Errors) locked/skipped)" }
+        Write-Host $msg -ForegroundColor Green
+    }
+
+    if ($Dev -and (_Test-HasCommand 'pnpm')) {
+        if ($PSCmdlet.ShouldProcess('pnpm store', 'pnpm store prune')) {
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            pnpm store prune
+            $ErrorActionPreference = $prev
+            Write-Host '  pnpm store prune' -ForegroundColor Green
+        }
+    }
+
+    Write-Host ""
+    Write-Host ("  Freed about {0}  ({1} skip/error)" -f (_Format-ByteSize $totalFreed), $totalErrors) -ForegroundColor Cyan
+    Write-Host '  Still full?  topDisk -n 20 $HOME   ·   Get-DriveSpace   ·   cleanmgr / dprune' -ForegroundColor DarkGray
+    Write-Host '  Hibernation: powercfg /hibernate off     WSL VHDX: wsl --shutdown then compact' -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -2324,10 +3049,16 @@ function _Get-ProfileCommandCategory {
         'du'                       = 'Linux-native'
         'Clear-Host'               = 'Linux-native'
         'Kill-Port'                = 'Network & process'
+        'Kill-ProcessByPort'       = 'Network & process'
+        'Kill-ProcessById'         = 'Network & process'
+        'topProcess'               = 'Network & process'
         'Test-Port'                = 'Network & process'
         'Get-MyIP'                 = 'Network & process'
         'Start-Serve'              = 'Network & process'
         'Get-SysResource'          = 'System'
+        'Get-DriveSpace'           = 'System'
+        'Clear-DriveSpace'         = 'System'
+        'topDisk'                  = 'System'
         'Invoke-RestTest'          = 'HTTP'
         'mkcd'                     = 'Files'
         'Copy-CurrentPath'         = 'Files'
@@ -2583,6 +3314,11 @@ function Show-Command {
 _Set-ProfileAlias -Name clear -Value Clear-Host -Synopsis 'Clear the host buffer (Unix clear).'
 _Set-ProfileAlias -Name ccp -Value Copy-CurrentPath -Synopsis 'Copy the current directory path to the clipboard.'
 _Set-ProfileAlias -Name jdk -Value Switch-Jdk -Synopsis 'Switch the session JDK (JAVA_HOME + PATH).'
+_Set-ProfileAlias -Name killport -Value Kill-ProcessByPort -Synopsis 'Kill the process(es) listening on a TCP port.'
+_Set-ProfileAlias -Name killpid -Value Kill-ProcessById -Synopsis 'Force-kill one or more processes by PID.'
+_Set-ProfileAlias -Name Top-Process -Value topProcess -Synopsis 'Live TUI of the heaviest processes (same as topProcess).'
+_Set-ProfileAlias -Name diskSpace -Value Get-DriveSpace -Synopsis 'Dashboard of what is eating C: (or another drive).'
+_Set-ProfileAlias -Name cleanDisk -Value Clear-DriveSpace -Synopsis 'Reclaim space from safe temp and package caches.'
 _Set-ProfileAlias -Name Welcome-Banner -Value Show-WelcomeBanner -Synopsis 'Alias for Show-WelcomeBanner.'
 _Set-ProfileAlias -Name zls -Value Get-7ZipList -Synopsis 'List archive contents (7z l).'
 _Set-ProfileAlias -Name ztest -Value Test-7ZipArchive -Synopsis 'Test archive integrity (7z t).'
