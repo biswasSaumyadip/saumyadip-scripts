@@ -154,6 +154,16 @@ In the shell, `Get-Help <Name> -Examples` works for every function below.
 | `Extract-File` | Unpack an archive with 7-Zip (`Expand-Archive` fallback) | `Extract-File -Path .\payload.zip` |
 | `Compress-Dir` | Zip or tarball a folder with a timestamped name | `Compress-Dir -Path .\dist -Format zip` |
 
+### Bookmarks
+
+Explicit, permanent directory names stored in `%USERPROFILE%\.pwsh-bookmarks.json`. Distinct from zoxide (`z` / `zi`), which guesses by frecency — a bookmark always points at the same path until you change it. The JSON file is read only when you invoke a bookmark command (or press Tab), not on every shell startup. `gb` and `rb` tab-complete saved names from the file.
+
+| Command | Description | Example |
+| --- | --- | --- |
+| `Set-Bookmark` / `bm` | Save a bookmark (defaults to `$PWD`; `-Force` skips overwrite prompt) | `bm docs` |
+| `Goto-Bookmark` / `gb` | Jump to a named bookmark, or list all (Name, Path) with no argument | `gb docs` |
+| `Remove-Bookmark` / `rb` | Delete a named bookmark from the JSON store | `rb docs` |
+
 ### 7-Zip archives
 
 | Command | Description | Example |
@@ -232,6 +242,9 @@ In the shell, `Get-Help <Name> -Examples` works for every function below.
 | --- | --- |
 | `clear` | `Clear-Host` |
 | `ccp` | `Copy-CurrentPath` |
+| `bm` | `Set-Bookmark` |
+| `gb` | `Goto-Bookmark` |
+| `rb` | `Remove-Bookmark` |
 | `jdk` | `Switch-Jdk` |
 | `Welcome-Banner` | `Show-WelcomeBanner` |
 | `zls` | `Get-7ZipList` |

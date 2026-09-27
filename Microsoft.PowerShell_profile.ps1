@@ -1807,6 +1807,370 @@ function Copy-CurrentPath {
     $path
 }
 
+# -----------------------------------------------------------------------------
+# Named directory bookmarks (explicit + permanent; not zoxide frecency)
+# Stored at $env:USERPROFILE\.pwsh-bookmarks.json. The file is read only
+# when a bookmark command or tab-completer runs — never at profile load.
+# -----------------------------------------------------------------------------
+function _Get-BookmarkStorePath {
+    Join-Path $env:USERPROFILE '.pwsh-bookmarks.json'
+}
+
+function _New-BookmarkMap {
+    return [System.Collections.Generic.Dictionary[string, string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+}
+
+function _Get-StringEditDistance {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Left,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Right
+    )
+    $a = $Left.ToLowerInvariant()
+    $b = $Right.ToLowerInvariant()
+    $n = $a.Length
+    $m = $b.Length
+    if ($n -eq 0) { return $m }
+    if ($m -eq 0) { return $n }
+
+    $prev = [int[]]::new($m + 1)
+    $curr = [int[]]::new($m + 1)
+    for ($j = 0; $j -le $m; $j++) { $prev[$j] = $j }
+
+    for ($i = 1; $i -le $n; $i++) {
+        $curr[0] = $i
+        for ($j = 1; $j -le $m; $j++) {
+            $cost = if ($a[$i - 1] -eq $b[$j - 1]) { 0 } else { 1 }
+            $del = $prev[$j] + 1
+            $ins = $curr[$j - 1] + 1
+            $sub = $prev[$j - 1] + $cost
+            $curr[$j] = [math]::Min([math]::Min($del, $ins), $sub)
+        }
+        $swap = $prev
+        $prev = $curr
+        $curr = $swap
+    }
+    return $prev[$m]
+}
+
+function _Get-ClosestBookmarkName {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string[]]$Candidates
+    )
+    if ($Candidates.Count -eq 0) { return $null }
+
+    $prefix = @(
+        $Candidates | Where-Object {
+            $_.StartsWith($Name, [StringComparison]::OrdinalIgnoreCase)
+        }
+    )
+    if ($prefix.Count -eq 1) { return $prefix[0] }
+
+    $best = $null
+    $bestDist = [int]::MaxValue
+    foreach ($candidate in $Candidates) {
+        $dist = _Get-StringEditDistance -Left $Name -Right $candidate
+        if ($dist -lt $bestDist) {
+            $bestDist = $dist
+            $best = $candidate
+        }
+    }
+
+    $max = [math]::Max(2, [int][math]::Ceiling($Name.Length / 2.0))
+    if ($bestDist -le $max) { return $best }
+    return $null
+}
+
+function _Read-BookmarkStore {
+    $path = _Get-BookmarkStorePath
+    $map = _New-BookmarkMap
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $map
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        throw "Could not read bookmark store '$path': $($_.Exception.Message)"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        return $map
+    }
+
+    try {
+        $parsed = $raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    }
+    catch {
+        throw "Bookmark store '$path' is not valid JSON. Fix the file or delete it to start fresh. $($_.Exception.Message)"
+    }
+
+    if ($null -eq $parsed) {
+        return $map
+    }
+    if ($parsed -isnot [System.Collections.IDictionary]) {
+        throw "Bookmark store '$path' must be a JSON object of { `"name`": `"path`" } pairs, not $($parsed.GetType().Name)."
+    }
+
+    foreach ($key in $parsed.Keys) {
+        $name = [string]$key
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $map[$name.Trim()] = [string]$parsed[$key]
+    }
+    return $map
+}
+
+function _Write-BookmarkStore {
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Map
+    )
+    $path = _Get-BookmarkStorePath
+    $ordered = [ordered]@{}
+    foreach ($key in @($Map.Keys | Sort-Object)) {
+        $ordered[$key] = [string]$Map[$key]
+    }
+
+    $json = if ($ordered.Count -eq 0) { '{}' } else { $ordered | ConvertTo-Json -Depth 4 }
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $temp = "$path.tmp-$PID"
+    try {
+        [System.IO.File]::WriteAllText($temp, $json + [Environment]::NewLine, $utf8)
+        Move-Item -LiteralPath $temp -Destination $path -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $temp) {
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function _Resolve-BookmarkTargetPath {
+    param([string]$Path)
+    $target = if ([string]::IsNullOrWhiteSpace($Path)) { $PWD.ProviderPath } else { $Path }
+    if (-not (Test-Path -LiteralPath $target)) {
+        throw "Cannot save bookmark: path does not exist: $target"
+    }
+    $item = Get-Item -LiteralPath $target -ErrorAction Stop
+    if (-not $item.PSIsContainer) {
+        throw "Cannot save bookmark: path is not a directory: $($item.FullName)"
+    }
+    return $item.FullName
+}
+
+function _Complete-BookmarkName {
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+    try {
+        $store = _Read-BookmarkStore
+    }
+    catch {
+        return
+    }
+
+    $word = [string]$wordToComplete
+    $store.GetEnumerator() |
+        Where-Object {
+            [string]::IsNullOrEmpty($word) -or
+            $_.Key.StartsWith($word, [StringComparison]::OrdinalIgnoreCase)
+        } |
+        Sort-Object Key |
+        ForEach-Object {
+            $completionText = $_.Key
+            if ($completionText -match "[^\w\-\.]") {
+                $completionText = "'" + ($completionText -replace "'", "''") + "'"
+            }
+            [System.Management.Automation.CompletionResult]::new(
+                $completionText,
+                $_.Key,
+                'ParameterValue',
+                [string]$_.Value
+            )
+        }
+}
+
+function Set-Bookmark {
+    <#
+    .SYNOPSIS
+        Save an explicit, permanent directory bookmark under a short name.
+    .DESCRIPTION
+        Writes name-to-path pairs to $env:USERPROFILE\.pwsh-bookmarks.json.
+        Unlike zoxide (z / zi), a bookmark always resolves to the same path
+        until you change or remove it. The store is read and written only
+        when this command runs. -Path defaults to the current directory.
+        Re-using a name prompts for confirmation unless -Force is passed.
+    .EXAMPLE
+        Set-Bookmark -Name docs
+        Bookmark the current directory as "docs" (alias: bm docs).
+    .EXAMPLE
+        bm src C:\work\project\src
+        Bookmark an explicit path as "src".
+    .EXAMPLE
+        Set-Bookmark -Name docs -Path D:\notes -Force
+        Overwrite an existing bookmark without prompting.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Name,
+
+        [Parameter(Position = 1)]
+        [string]$Path,
+
+        [switch]$Force
+    )
+
+    $Name = $Name.Trim()
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        throw 'Bookmark name cannot be empty or whitespace.'
+    }
+
+    $resolved = _Resolve-BookmarkTargetPath -Path $Path
+    $store = _Read-BookmarkStore
+    $existingKey = @(
+        $store.Keys | Where-Object { $_.Equals($Name, [StringComparison]::OrdinalIgnoreCase) }
+    ) | Select-Object -First 1
+
+    if ($existingKey) {
+        $previous = [string]$store[$existingKey]
+        if (-not $Force -and $previous -ne $resolved) {
+            $query = "Bookmark '$existingKey' already points to:`n  $previous`nOverwrite with:`n  $resolved ?"
+            if (-not $PSCmdlet.ShouldContinue($query, 'Set-Bookmark')) {
+                Write-Host 'Bookmark unchanged.' -ForegroundColor DarkYellow
+                return
+            }
+        }
+        [void]$store.Remove($existingKey)
+    }
+
+    $store[$Name] = $resolved
+    _Write-BookmarkStore -Map $store
+    Write-Host ("Saved bookmark '{0}' -> {1}" -f $Name, $resolved) -ForegroundColor Green
+}
+
+function Goto-Bookmark {
+    <#
+    .SYNOPSIS
+        Jump to a named directory bookmark, or list all bookmarks.
+    .DESCRIPTION
+        Resolves -Name from $env:USERPROFILE\.pwsh-bookmarks.json and
+        Set-Location there. With no name, prints a Name/Path table (this
+        is the list/get command — there is no separate Get-Bookmark).
+        Missing names error with a closest-match suggestion. A stored
+        path that no longer exists produces a warning instead of crashing.
+        Distinct from zoxide: names are explicit and do not change with use.
+    .EXAMPLE
+        Goto-Bookmark
+        List every saved bookmark (alias: gb).
+    .EXAMPLE
+        gb docs
+        Change directory to the path saved as "docs".
+    .EXAMPLE
+        Goto-Bookmark -Name src
+        Same jump using the full command name.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Name
+    )
+
+    $store = _Read-BookmarkStore
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        if ($store.Count -eq 0) {
+            Write-Host 'No bookmarks saved. Create one with: bm <name>' -ForegroundColor DarkYellow
+            return
+        }
+        $store.GetEnumerator() |
+            Sort-Object Key |
+            ForEach-Object {
+                [pscustomobject]@{ Name = $_.Key; Path = [string]$_.Value }
+            } |
+            Format-Table -Property Name, Path -AutoSize
+        return
+    }
+
+    $Name = $Name.Trim()
+    if (-not $store.ContainsKey($Name)) {
+        $names = @($store.Keys)
+        $msg = "Bookmark '$Name' was not found."
+        $hint = if ($names.Count -gt 0) {
+            _Get-ClosestBookmarkName -Name $Name -Candidates $names
+        }
+        else {
+            $null
+        }
+        if ($hint) { $msg += " Did you mean '$hint'?" }
+        $msg += " Run 'gb' with no name to list saved bookmarks."
+        throw $msg
+    }
+
+    $target = [string]$store[$Name]
+    if (-not (Test-Path -LiteralPath $target)) {
+        Write-Warning "Bookmark '$Name' points to '$target', but that path no longer exists on disk. Update it with: bm $Name -Force   or remove it with: rb $Name"
+        return
+    }
+
+    Set-Location -LiteralPath $target
+}
+
+function Remove-Bookmark {
+    <#
+    .SYNOPSIS
+        Delete a named directory bookmark from the JSON store.
+    .DESCRIPTION
+        Removes the entry from $env:USERPROFILE\.pwsh-bookmarks.json and
+        writes the file immediately. Errors if the name is not saved.
+        Does not delete the directory on disk — only the bookmark name.
+    .EXAMPLE
+        Remove-Bookmark -Name docs
+        Drop the "docs" bookmark (alias: rb docs).
+    .EXAMPLE
+        rb src
+        Same deletion using the short alias.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, Position = 0)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Name
+    )
+
+    $Name = $Name.Trim()
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        throw 'Bookmark name cannot be empty or whitespace.'
+    }
+
+    $store = _Read-BookmarkStore
+    if (-not $store.ContainsKey($Name)) {
+        $names = @($store.Keys)
+        $msg = "Bookmark '$Name' was not found."
+        $hint = if ($names.Count -gt 0) {
+            _Get-ClosestBookmarkName -Name $Name -Candidates $names
+        }
+        else {
+            $null
+        }
+        if ($hint) { $msg += " Did you mean '$hint'?" }
+        $msg += " Run 'gb' with no name to list saved bookmarks."
+        throw $msg
+    }
+
+    $canonical = @(
+        $store.Keys | Where-Object { $_.Equals($Name, [StringComparison]::OrdinalIgnoreCase) }
+    ) | Select-Object -First 1
+    $previous = [string]$store[$canonical]
+    [void]$store.Remove($canonical)
+    _Write-BookmarkStore -Map $store
+    Write-Host ("Removed bookmark '{0}' (was {1})" -f $canonical, $previous) -ForegroundColor Green
+}
+
+Register-ArgumentCompleter -CommandName 'Goto-Bookmark' -ParameterName 'Name' -ScriptBlock ${function:_Complete-BookmarkName}
+Register-ArgumentCompleter -CommandName 'Remove-Bookmark' -ParameterName 'Name' -ScriptBlock ${function:_Complete-BookmarkName}
+
 function New-GuidStr {
     <#
     .SYNOPSIS
@@ -3064,6 +3428,9 @@ function _Get-ProfileCommandCategory {
         'Copy-CurrentPath'         = 'Files'
         'Extract-File'             = 'Files'
         'Compress-Dir'             = 'Files'
+        'Set-Bookmark'             = 'Bookmarks'
+        'Goto-Bookmark'            = 'Bookmarks'
+        'Remove-Bookmark'          = 'Bookmarks'
         'Get-7Zip'                 = '7-Zip archives'
         'Get-7ZipList'             = '7-Zip archives'
         'Test-7ZipArchive'         = '7-Zip archives'
@@ -3240,7 +3607,7 @@ function Show-Commands {
 
     $order = @(
         'Profile', 'Linux-native', 'Network & process', 'System', 'HTTP',
-        'Files', '7-Zip archives', 'Environment', 'Crypto & encoding',
+        'Files', 'Bookmarks', '7-Zip archives', 'Environment', 'Crypto & encoding',
         'JSON & env', 'Neovim', 'Docker', 'Git', 'Java', 'Other'
     )
 
@@ -3313,6 +3680,9 @@ function Show-Command {
 # -----------------------------------------------------------------------------
 _Set-ProfileAlias -Name clear -Value Clear-Host -Synopsis 'Clear the host buffer (Unix clear).'
 _Set-ProfileAlias -Name ccp -Value Copy-CurrentPath -Synopsis 'Copy the current directory path to the clipboard.'
+_Set-ProfileAlias -Name bm -Value Set-Bookmark -Synopsis 'Save a permanent directory bookmark (current dir unless -Path is given).'
+_Set-ProfileAlias -Name gb -Value Goto-Bookmark -Synopsis 'Jump to a named bookmark, or list all bookmarks when given no name.'
+_Set-ProfileAlias -Name rb -Value Remove-Bookmark -Synopsis 'Delete a named directory bookmark from the JSON store.'
 _Set-ProfileAlias -Name jdk -Value Switch-Jdk -Synopsis 'Switch the session JDK (JAVA_HOME + PATH).'
 _Set-ProfileAlias -Name killport -Value Kill-ProcessByPort -Synopsis 'Kill the process(es) listening on a TCP port.'
 _Set-ProfileAlias -Name killpid -Value Kill-ProcessById -Synopsis 'Force-kill one or more processes by PID.'
