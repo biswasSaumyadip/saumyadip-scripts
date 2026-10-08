@@ -3220,8 +3220,8 @@ function Get-JavaProcesses {
 }
 
 function _Get-JdkVersionLabel {
-    param([string]$Home)
-    $rel = Join-Path $Home 'release'
+    param([string]$JdkHome)
+    $rel = Join-Path $JdkHome 'release'
     if (Test-Path -LiteralPath $rel) {
         foreach ($line in Get-Content -LiteralPath $rel -ErrorAction SilentlyContinue) {
             if ($line -match '^JAVA_VERSION="?([^"]+)"?') { return $Matches[1] }
@@ -3271,16 +3271,16 @@ function Get-JavaHome {
     [CmdletBinding()]
     param()
     $current = $env:JAVA_HOME
-    $rows = foreach ($home in _Get-InstalledJdkHomes) {
-        $ver = _Get-JdkVersionLabel -Home $home
+    $rows = foreach ($jdkHome in _Get-InstalledJdkHomes) {
+        $ver = _Get-JdkVersionLabel -JdkHome $jdkHome
         $isCurrent = $current -and (
-            $home.Equals($current, [StringComparison]::OrdinalIgnoreCase) -or
-            $current.StartsWith($home, [StringComparison]::OrdinalIgnoreCase)
+            $jdkHome.Equals($current, [StringComparison]::OrdinalIgnoreCase) -or
+            $current.StartsWith($jdkHome, [StringComparison]::OrdinalIgnoreCase)
         )
         [pscustomobject]@{
             Current = $isCurrent
             Version = $(if ($ver) { $ver } else { '?' })
-            Path    = $home
+            Path    = $jdkHome
         }
     }
     if (-not $rows) {
@@ -3320,9 +3320,9 @@ function Set-JavaHome {
     $unique = _Get-InstalledJdkHomes
     if (-not $PathOrVersion) {
         if ((_Test-HasCommand 'fzf') -and $unique) {
-            $labels = foreach ($home in $unique) {
-                $ver = _Get-JdkVersionLabel -Home $home
-                if ($ver) { "$ver  $home" } else { $home }
+            $labels = foreach ($jdkHome in $unique) {
+                $ver = _Get-JdkVersionLabel -JdkHome $jdkHome
+                if ($ver) { "$ver  $jdkHome" } else { $jdkHome }
             }
             $pick = $labels | fzf --prompt 'JAVA_HOME> ' --height 40%
             if (-not $pick) { return }
@@ -3344,7 +3344,7 @@ function Set-JavaHome {
     else {
         $chosen = $unique | Where-Object {
             $_ -match [regex]::Escape($PathOrVersion) -or
-            ((_Get-JdkVersionLabel -Home $_) -like "*$PathOrVersion*")
+            ((_Get-JdkVersionLabel -JdkHome $_) -like "*$PathOrVersion*")
         } | Select-Object -First 1
         if ($chosen -and (Test-Path (Join-Path $chosen 'current\bin\java.exe'))) {
             $chosen = Join-Path $chosen 'current'
@@ -3364,7 +3364,7 @@ function Set-JavaHome {
         [void]$parts.Add($p)
     }
     $env:PATH = ($parts -join ';')
-    $ver = _Get-JdkVersionLabel -Home $chosen
+    $ver = _Get-JdkVersionLabel -JdkHome $chosen
     Write-Host "JAVA_HOME=$($env:JAVA_HOME)$(if ($ver) { "  ($ver)" })" -ForegroundColor Green
     if (_Test-HasCommand 'java') { java -version 2>&1 | Write-Host }
 }
